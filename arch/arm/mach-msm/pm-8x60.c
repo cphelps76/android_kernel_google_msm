@@ -123,6 +123,12 @@ static char *msm_pm_sleep_mode_labels[MSM_PM_SLEEP_MODE_NR] = {
 		"standalone_power_collapse",
 };
 
+
+// tmtmtm
+#include "linux/time.h"  // getnstimeofday(), timespec
+extern volatile unsigned long  usbhost_wake_in_suspend_total_ms;
+
+
 static struct hrtimer pm_hrtimer;
 static struct msm_pm_sleep_ops pm_sleep_ops;
 static bool msm_pm_ldo_retention_enabled = true;
@@ -1065,21 +1071,45 @@ static int msm_pm_enter(suspend_state_t state)
 		uint32_t msm_pm_max_sleep_time = 0;
 		int collapsed = 0;
 
-		if (MSM_PM_DEBUG_SUSPEND & msm_pm_debug_mask)
+
+		// tmtmtm:
+		unsigned long wakeInSuspendDurationMs = 0l;
+		struct timespec wakeInSuspendDurationTP;
+		getnstimeofday(&wakeEndTP);
+		pr_info("#:# wakeStartTP.tv_sec %lu, nsec %lu\n", 
+			wakeStartTP.tv_sec, wakeStartTP.tv_nsec/NSEC_PER_MSEC);
+		pr_info("#:# wakeEndTP.tv_sec %lu, nsec %lu\n", 
+			wakeEndTP.tv_sec, wakeEndTP.tv_nsec/NSEC_PER_MSEC);
+		if(wakeStartTP.tv_sec>0l && wakeStartTP.tv_sec<wakeEndTP.tv_sec) {
+			wakeInSuspendDurationTP = timespec_sub(wakeEndTP,wakeStartTP);
+			wakeInSuspendDurationMs = wakeInSuspendDurationTP.tv_sec *1000l + (wakeInSuspendDurationTP.tv_nsec/NSEC_PER_MSEC);
+			usbhost_wake_in_suspend_total_ms += wakeInSuspendDurationMs;
+			pr_info("#:# wakeInSuspendDurationTP.tv_sec %lu, nsec %lu\n", 
+				wakeInSuspendDurationTP.tv_sec, wakeInSuspendDurationTP.tv_nsec/NSEC_PER_MSEC);
+		}
+
+		if (MSM_PM_DEBUG_SUSPEND & msm_pm_debug_mask) {
 			pr_info("%s: power collapse\n", __func__);
+
+			// tmtmtm
+			if(wakeStartTP.tv_sec>0l) {
+				pr_info("#:# wakeInSuspendDurationMs %lu, total %lu\n", wakeInSuspendDurationMs, usbhost_wake_in_suspend_total_ms);
+			}
+		}
 
 		clock_debug_print_enabled();
 
+#ifdef CONFIG_MSM_SLEEP_TIME_OVERRIDE
 		if (msm_pm_sleep_time_override > 0) {
 			int64_t ns = NSEC_PER_SEC *
 				(int64_t) msm_pm_sleep_time_override;
-			do_div(ns, NSEC_PER_SEC / SCLK_HZ);
-			msm_pm_max_sleep_time = (uint32_t) ns;
+			msm_pm_set_max_sleep_time(ns);
+			msm_pm_sleep_time_override = 0;
 		}
-
+#endif /* CONFIG_MSM_SLEEP_TIME_OVERRIDE */
 		if (pm_sleep_ops.lowest_limits)
 			rs_limits = pm_sleep_ops.lowest_limits(false,
-		MSM_PM_SLEEP_MODE_POWER_COLLAPSE, &time_param, &power);
+			MSM_PM_SLEEP_MODE_POWER_COLLAPSE, &time_param, &power);
 
 		if (rs_limits) {
 			if (pm_sleep_ops.enter_sleep)
@@ -1087,7 +1117,7 @@ static int msm_pm_enter(suspend_state_t state)
 						msm_pm_max_sleep_time,
 						rs_limits, false, true);
 			if (!ret) {
-				collapsed = msm_pm_power_collapse(false);
+				int collapsed = msm_pm_power_collapse(false);
 				if (pm_sleep_ops.exit_sleep) {
 					pm_sleep_ops.exit_sleep(rs_limits,
 						false, true, collapsed);
@@ -1098,10 +1128,26 @@ static int msm_pm_enter(suspend_state_t state)
 				__func__);
 		}
 		time = msm_pm_timer_exit_suspend(time, period);
-		if (collapsed)
-			msm_pm_add_stat(MSM_PM_STAT_SUSPEND, time);
-		else
-			msm_pm_add_stat(MSM_PM_STAT_FAILED_SUSPEND, time);
+		msm_pm_add_stat(MSM_PM_STAT_SUSPEND, time);
+
+
+#ifdef CONFIG_PM_DEBUG
+		//msm_show_suspend_time(time);		// "Suspended for "
+
+		{
+			struct timespec suspend_time = {0, 0};
+			timespec_add_ns(&suspend_time, time);
+			pr_info("Suspended for %lu.%03lu seconds wake_in_suspend_total_ms=%lu\n", suspend_time.tv_sec,
+				suspend_time.tv_nsec / NSEC_PER_MSEC, usbhost_wake_in_suspend_total_ms);
+
+			// tmtmtm: NOT CORRECT TIME
+			getnstimeofday(&wakeStartTP);
+			wakeStartTP.tv_sec += suspend_time.tv_sec;
+			pr_info("#:# wakeStartTP.tv_sec %lu, nsec %lu\n", 
+				wakeStartTP.tv_sec, wakeStartTP.tv_nsec/NSEC_PER_MSEC);
+		}
+#endif
+
 	} else if (allow[MSM_PM_SLEEP_MODE_POWER_COLLAPSE_STANDALONE]) {
 		if (MSM_PM_DEBUG_SUSPEND & msm_pm_debug_mask)
 			pr_info("%s: standalone power collapse\n", __func__);
@@ -1115,6 +1161,7 @@ static int msm_pm_enter(suspend_state_t state)
 			pr_info("%s: swfi\n", __func__);
 		msm_pm_swfi();
 	}
+
 
 enter_exit:
 	if (MSM_PM_DEBUG_SUSPEND & msm_pm_debug_mask)
