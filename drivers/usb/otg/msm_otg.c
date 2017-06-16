@@ -1504,14 +1504,11 @@ static void msm_otg_start_host(struct usb_otg *otg, int on)
 			ulpi_write(otg->phy, OTG_COMP_DISABLE,
 				ULPI_CLR(ULPI_PWR_CLK_MNG_REG));
 
-#ifdef CONFIG_CHARGER_SMB345
 		smb345_otg_status(false);	// will clear usbhost_hostmode
-		if(usbhost_charge_slave_devices) {
+	        if(usbhost_charge_slave_devices) {
 			msm_hsusb_vbus_power(motg, 0);
-#endif
-                }
+		}
 	}
-    printk("#:# msm_otg_start_host on=%d done\n",on);}
 }
 
 static int msm_otg_usbdev_notify(struct notifier_block *self,
